@@ -26,7 +26,7 @@ const App: React.FC = () => {
   const currentInputTranscriptionRef = useRef('');
   const currentOutputTranscriptionRef = useRef('');
 
-  // Critical check for Vercel deployment
+  // The API key must be obtained from process.env.API_KEY
   const API_KEY = process.env.API_KEY;
 
   const quickPrompts = [
@@ -64,12 +64,12 @@ const App: React.FC = () => {
     name: 'bookAppointment',
     parameters: {
       type: Type.OBJECT,
-      description: 'Trigger the background service to create a Google Calendar event and notify the coordinators.',
+      description: 'Notify the clinic of a new appointment request.',
       properties: {
         clientName: { type: Type.STRING, description: 'Full name of the patient.' },
         appointmentDate: { type: Type.STRING, description: 'Date (YYYY-MM-DD).' },
         appointmentTime: { type: Type.STRING, description: 'Time (e.g., 4:30 PM).' },
-        purpose: { type: Type.STRING, description: 'Reason for visit/service requested.' },
+        purpose: { type: Type.STRING, description: 'Reason for visit.' },
       },
       required: ['clientName', 'appointmentDate', 'appointmentTime', 'purpose'],
     },
@@ -87,8 +87,8 @@ const App: React.FC = () => {
   };
 
   const startSession = async () => {
-    if (!API_KEY) {
-      setErrorMsg("API Key is missing. Please add API_KEY to Vercel Environment Variables.");
+    if (!API_KEY || API_KEY === "undefined") {
+      setErrorMsg("Critical: API_KEY is missing. Add it to Vercel Project Settings > Environment Variables.");
       setStatus(ConnectionStatus.ERROR);
       return;
     }
@@ -97,6 +97,7 @@ const App: React.FC = () => {
       setStatus(ConnectionStatus.CONNECTING);
       setErrorMsg(null);
 
+      // Initialize AI instance right before connection
       const ai = new GoogleGenAI({ apiKey: API_KEY });
       const inCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       const outCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
@@ -129,7 +130,7 @@ const App: React.FC = () => {
 
             sessionPromise.then((session) => {
               session.sendRealtimeInput({ 
-                text: "Please proactively greet the patient and introduce yourself as the G.C MIA Dental Clinic receptionist. Start the conversation in a warm Taglish tone." 
+                text: "Start by saying: 'Kumusta! I am Mia, your digital receptionist for G.C Mia Dental Clinic in Antipolo. How can I help you today?' in a warm Taglish tone." 
               });
             });
           },
@@ -140,11 +141,12 @@ const App: React.FC = () => {
                 if (fc.name === 'bookAppointment') {
                   const args = fc.args as any;
                   try {
+                    // Simulating backend call
                     await new Promise(r => setTimeout(r, 1500));
                     setLastBooking({ name: args.clientName, date: args.appointmentDate, time: args.appointmentTime });
                     sessionPromise.then((session) => {
                       session.sendToolResponse({
-                        functionResponses: [{ id: fc.id, name: fc.name, response: { status: "success", confirmation: "Your booking is in our system." } }]
+                        functionResponses: [{ id: fc.id, name: fc.name, response: { status: "success", info: "Booking submitted." } }]
                       });
                     });
                   } catch (err) {
@@ -216,21 +218,21 @@ const App: React.FC = () => {
           onerror: (e) => {
             console.error(e);
             setStatus(ConnectionStatus.ERROR);
-            setErrorMsg("Connection Error. Please check your network and API key.");
+            setErrorMsg("Mia is currently unavailable. Please check your connection or the Clinic's API configuration.");
           },
           onclose: () => setStatus(ConnectionStatus.DISCONNECTED)
         },
         config: {
           responseModalities: [Modality.AUDIO],
-          thinkingConfig: { thinkingBudget: 0 },
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
           tools: [{ functionDeclarations: [bookAppointmentTool] }],
           inputAudioTranscription: {},
           outputAudioTranscription: {},
-          systemInstruction: `You are the professional Voice AI Receptionist for G.C MIA Dental Clinic.
-          CLINIC INFO: Antipolo City, Rizal. Dr. Gloryner Mia-Dibaratun.
-          Schedule: Mon–Thu (4PM-7PM), Sat (12PM-5PM), Sun (12PM-7PM). Friday is CLOSED.
-          TONE: Warm Taglish.`
+          systemInstruction: `You are Mia, the professional Voice AI Assistant for G.C Mia Dental Clinic.
+          Location: Antipolo City. Dr. Gloryner Mia-Dibaratun. 
+          Goal: Assist patients with bookings, pricing, and hours. 
+          Tone: Warm, empathetic, clinical, and fluent in Taglish/English.
+          Hours: Mon-Thu 4pm-7pm, Sat-Sun 12pm-7pm. Friday is CLOSED.`
         }
       });
       sessionPromiseRef.current = sessionPromise;
@@ -252,15 +254,12 @@ const App: React.FC = () => {
       <header className="bg-white/80 backdrop-blur-md border-b border-slate-100 sticky top-0 z-20 shadow-sm">
         <div className="max-w-6xl mx-auto px-6 h-20 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-blue-500 rounded-xl flex items-center justify-center text-white shadow-lg shadow-blue-200">
+            <div className="w-12 h-12 bg-blue-500 rounded-xl flex items-center justify-center text-white shadow-lg">
               <i className="fas fa-tooth text-2xl"></i>
             </div>
             <div>
               <h1 className="font-bold text-slate-900 text-xl tracking-tight">G.C MIA <span className="text-blue-600">DENTAL</span></h1>
-              <div className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">24/7 AI Receptionist</p>
-              </div>
+              <p className="text-[10px] uppercase tracking-widest text-slate-400 font-bold">Smart Receptionist</p>
             </div>
           </div>
         </div>
@@ -269,78 +268,83 @@ const App: React.FC = () => {
       <main className="flex-1 max-w-6xl mx-auto w-full px-6 py-10 flex flex-col lg:flex-row gap-10">
         <div className="flex-1 space-y-10">
           {errorMsg && (
-            <div className="bg-rose-50 border border-rose-100 p-4 rounded-2xl text-rose-600 text-xs font-medium flex items-center gap-3 animate-pulse">
-              <i className="fas fa-circle-exclamation text-lg"></i>
+            <div className="bg-rose-50 border border-rose-100 p-4 rounded-2xl text-rose-600 text-[11px] font-bold flex items-center gap-3">
+              <i className="fas fa-exclamation-triangle text-lg"></i>
               {errorMsg}
             </div>
           )}
 
           {lastBooking && (
-            <div className="animate-in zoom-in-95 duration-300 bg-emerald-50 border border-emerald-100 p-6 rounded-3xl flex items-center gap-5 shadow-sm text-emerald-900">
-              <div className="w-12 h-12 bg-emerald-500 rounded-full flex items-center justify-center text-white shrink-0">
-                <i className="fas fa-check text-xl"></i>
+            <div className="bg-emerald-50 border border-emerald-100 p-6 rounded-3xl flex items-center gap-5 shadow-sm text-emerald-900">
+              <div className="w-10 h-10 bg-emerald-500 rounded-full flex items-center justify-center text-white shrink-0">
+                <i className="fas fa-calendar-check"></i>
               </div>
               <div className="flex-1">
-                <h4 className="font-bold text-lg leading-tight">Booking confirmed!</h4>
-                <p className="text-sm opacity-80">{lastBooking.name} on {lastBooking.date}</p>
+                <h4 className="font-bold text-sm">Booking Confirmed!</h4>
+                <p className="text-[11px] opacity-80">{lastBooking.name} for {lastBooking.date}</p>
               </div>
-              <button onClick={() => setLastBooking(null)} className="p-2 hover:bg-emerald-100 rounded-full transition-colors"><i className="fas fa-times"></i></button>
+              <button onClick={() => setLastBooking(null)} className="p-2 hover:bg-emerald-100 rounded-full"><i className="fas fa-times"></i></button>
             </div>
           )}
 
-          <section className="glass-card rounded-[2rem] p-10 text-center relative overflow-hidden">
-            <div className="relative z-10">
-              <span className="inline-block py-1 px-3 bg-blue-50 text-blue-600 rounded-full text-[10px] font-bold uppercase tracking-widest mb-4">Voice Interface</span>
-              <h2 className="text-4xl font-extrabold text-slate-900 mb-4 tracking-tight">Talk to Mia</h2>
-              
-              <div className="relative flex flex-col items-center justify-center my-12">
-                <div className={`relative w-48 h-48 rounded-full flex flex-col items-center justify-center transition-all duration-700 ${
-                  status === ConnectionStatus.CONNECTED ? 'bg-white shadow-xl ring-8 ring-blue-50 scale-105' : 'bg-slate-50 border-2 border-dashed border-slate-200'
-                }`}>
-                  {status === ConnectionStatus.CONNECTED ? (
-                    <div className="flex flex-col items-center gap-4">
-                      <VoiceVisualizer isActive={isAiSpeaking} color="bg-blue-500" />
-                      <div className="h-px w-8 bg-slate-100"></div>
-                      <VoiceVisualizer isActive={isUserSpeaking} color="bg-emerald-500" />
-                    </div>
-                  ) : (
-                    <i className="fas fa-microphone-slash text-3xl text-slate-300"></i>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-4 max-w-xs mx-auto">
-                <button
-                  onClick={handleToggleConnection}
-                  disabled={status === ConnectionStatus.CONNECTING}
-                  className={`w-full py-5 rounded-2xl font-bold text-lg shadow-xl transition-all ${
-                    status === ConnectionStatus.CONNECTED ? 'bg-rose-500 hover:bg-rose-600 text-white' : 'bg-blue-600 hover:bg-blue-700 text-white'
-                  } disabled:opacity-50`}
-                >
-                  {status === ConnectionStatus.CONNECTED ? 'End Session' : 'Start Conversation'}
-                </button>
+          <section className="glass-card rounded-[2rem] p-10 text-center relative">
+            <h2 className="text-3xl font-extrabold text-slate-900 mb-2">Speak to Mia</h2>
+            <p className="text-slate-400 text-sm mb-10">Experience our digital clinic assistant in real-time.</p>
+            
+            <div className="flex flex-col items-center justify-center my-10">
+              <div className={`w-40 h-40 rounded-full flex flex-col items-center justify-center transition-all ${
+                status === ConnectionStatus.CONNECTED ? 'bg-white shadow-2xl ring-8 ring-blue-50' : 'bg-slate-50 border-2 border-dashed border-slate-200'
+              }`}>
+                {status === ConnectionStatus.CONNECTED ? (
+                  <div className="flex flex-col items-center gap-3">
+                    <VoiceVisualizer isActive={isAiSpeaking} color="bg-blue-500" />
+                    <div className="h-px w-6 bg-slate-100"></div>
+                    <VoiceVisualizer isActive={isUserSpeaking} color="bg-emerald-500" />
+                  </div>
+                ) : (
+                  <i className="fas fa-microphone-slash text-3xl text-slate-200"></i>
+                )}
               </div>
             </div>
+
+            <button
+              onClick={handleToggleConnection}
+              disabled={status === ConnectionStatus.CONNECTING}
+              className={`px-10 py-4 rounded-2xl font-bold text-sm shadow-xl transition-all ${
+                status === ConnectionStatus.CONNECTED ? 'bg-rose-500 hover:bg-rose-600 text-white' : 'bg-blue-600 hover:bg-blue-700 text-white'
+              } disabled:opacity-50`}
+            >
+              {status === ConnectionStatus.CONNECTED ? 'Stop Assistant' : 'Start Assistant'}
+            </button>
           </section>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {quickPrompts.map((p, i) => (
+              <button 
+                key={i}
+                disabled={status !== ConnectionStatus.CONNECTED}
+                onClick={() => handleSendText(p.text)}
+                className="p-3 text-[10px] font-bold text-slate-500 bg-white border border-slate-100 rounded-xl hover:border-blue-300 hover:text-blue-600 transition-all disabled:opacity-30"
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
 
           <DentalServices />
         </div>
 
-        <aside className="lg:w-[400px]">
+        <aside className="lg:w-[380px]">
           <div className="glass-card rounded-[2rem] flex flex-col shadow-xl border-slate-100 h-[600px] overflow-hidden sticky top-28">
-            <div className="p-6 border-b border-slate-100 bg-white/50 flex items-center justify-between">
-              <span className="font-bold text-sm text-slate-800 tracking-tight">Transcript</span>
-              <button onClick={() => setTranscriptions([])} className="text-[10px] font-bold text-slate-400 hover:text-slate-600 uppercase">Clear</button>
+            <div className="p-5 border-b border-slate-100 bg-white/50">
+              <span className="font-bold text-xs text-slate-400 uppercase tracking-widest">Conversation</span>
             </div>
             
-            <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+            <div className="flex-1 overflow-y-auto p-5 space-y-4 custom-scrollbar">
               {transcriptions.map((t, i) => (
                 <div key={i} className={`flex flex-col ${t.role === 'user' ? 'items-end' : 'items-start'}`}>
-                  <div className={`text-[10px] font-bold mb-1 uppercase ${t.role === 'user' ? 'text-blue-500' : 'text-slate-400'}`}>
-                    {t.role === 'user' ? 'You' : 'Mia'}
-                  </div>
-                  <div className={`max-w-[90%] p-4 rounded-2xl text-[13px] shadow-sm ${
-                    t.role === 'user' ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-white border border-slate-100 text-slate-700 rounded-tl-none'
+                  <div className={`max-w-[85%] p-4 rounded-2xl text-[12px] shadow-sm ${
+                    t.role === 'user' ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-white border border-slate-100 text-slate-600 rounded-tl-none'
                   }`}>
                     {t.text}
                   </div>
@@ -348,23 +352,23 @@ const App: React.FC = () => {
               ))}
             </div>
 
-            <div className="p-6 border-t border-slate-100 bg-white">
+            <div className="p-5 border-t border-slate-100 bg-white">
               <div className="relative">
                 <input 
                   type="text" 
                   value={textInput}
                   onChange={(e) => setTextInput(e.target.value)}
                   onKeyPress={(e) => e.key === 'Enter' && handleSendText()}
-                  placeholder="Type to Mia..."
+                  placeholder="Type here..."
                   disabled={status !== ConnectionStatus.CONNECTED}
-                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-5 py-4 text-sm focus:outline-none focus:ring-4 focus:ring-blue-500/10 transition-all disabled:opacity-50"
+                  className="w-full bg-slate-50 border border-slate-100 rounded-xl px-4 py-3 text-xs focus:outline-none focus:ring-4 focus:ring-blue-500/10 transition-all disabled:opacity-50"
                 />
                 <button 
                   onClick={() => handleSendText()}
                   disabled={status !== ConnectionStatus.CONNECTED || !textInput.trim()}
-                  className="absolute right-2 top-2 w-10 h-10 bg-blue-600 text-white rounded-xl flex items-center justify-center hover:bg-blue-700 disabled:bg-slate-300"
+                  className="absolute right-2 top-1.5 w-8 h-8 bg-blue-600 text-white rounded-lg flex items-center justify-center hover:bg-blue-700 disabled:bg-slate-300"
                 >
-                  <i className="fas fa-arrow-up text-sm"></i>
+                  <i className="fas fa-arrow-up text-xs"></i>
                 </button>
               </div>
             </div>
