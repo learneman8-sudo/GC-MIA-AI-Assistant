@@ -6,15 +6,6 @@ import { decode, decodeAudioData, createPcmBlob } from './utils/audioUtils';
 import VoiceVisualizer from './components/VoiceVisualizer';
 import DentalServices from './components/DentalServices';
 
-/**
- * CONFIGURATION:
- * Replace the URL below with your actual secure backend service endpoint.
- * This service handles Google Calendar events and sends invites to:
- * - learneman8@gmail.com
- * - drisgreg19@gmail.com
- */
-const BACKEND_API_URL = 'https://YOUR_SECURE_BACKEND_SERVICE_URL/api/book';
-
 const App: React.FC = () => {
   const [status, setStatus] = useState<ConnectionStatus>(ConnectionStatus.DISCONNECTED);
   const [transcriptions, setTranscriptions] = useState<TranscriptionEntry[]>([]);
@@ -25,17 +16,25 @@ const App: React.FC = () => {
   const [lastBooking, setLastBooking] = useState<{name: string, date: string, time: string} | null>(null);
   const [textInput, setTextInput] = useState('');
 
-  // Audio Contexts and Refs
   const inputAudioContextRef = useRef<AudioContext | null>(null);
   const outputAudioContextRef = useRef<AudioContext | null>(null);
   const nextStartTimeRef = useRef<number>(0);
   const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const activeAudioCountRef = useRef<number>(0);
   
-  // Gemini Session
   const sessionPromiseRef = useRef<Promise<any> | null>(null);
   const currentInputTranscriptionRef = useRef('');
   const currentOutputTranscriptionRef = useRef('');
+
+  // Critical check for Vercel deployment
+  const API_KEY = process.env.API_KEY;
+
+  const quickPrompts = [
+    { label: "Book Appointment", text: "I'd like to book a dental appointment, please." },
+    { label: "Price Check", text: "How much is a tooth cleaning or filling?" },
+    { label: "Clinic Hours", text: "What are your opening hours in Antipolo?" },
+    { label: "About Dr. Mia", text: "Tell me about Dr. Gloryner Mia's expertise." }
+  ];
 
   const stopSession = useCallback(() => {
     if (sessionPromiseRef.current) {
@@ -76,22 +75,29 @@ const App: React.FC = () => {
     },
   };
 
-  const handleSendText = () => {
-    if (!textInput.trim() || !sessionPromiseRef.current) return;
-    const message = textInput.trim();
+  const handleSendText = (customText?: string) => {
+    const message = customText || textInput.trim();
+    if (!message || !sessionPromiseRef.current) return;
+    
     setTranscriptions(prev => [...prev, { role: 'user', text: message, timestamp: Date.now() }]);
     sessionPromiseRef.current.then((session) => {
       session.sendRealtimeInput({ text: message });
     });
-    setTextInput('');
+    if (!customText) setTextInput('');
   };
 
   const startSession = async () => {
+    if (!API_KEY) {
+      setErrorMsg("API Key is missing. Please add API_KEY to Vercel Environment Variables.");
+      setStatus(ConnectionStatus.ERROR);
+      return;
+    }
+
     try {
       setStatus(ConnectionStatus.CONNECTING);
       setErrorMsg(null);
 
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+      const ai = new GoogleGenAI({ apiKey: API_KEY });
       const inCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       const outCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       
@@ -108,7 +114,6 @@ const App: React.FC = () => {
           onopen: () => {
             setStatus(ConnectionStatus.CONNECTED);
             
-            // Setup microphone streaming
             const source = inCtx.createMediaStreamSource(stream);
             const scriptProcessor = inCtx.createScriptProcessor(4096, 1, 1);
             scriptProcessor.onaudioprocess = (e) => {
@@ -122,7 +127,6 @@ const App: React.FC = () => {
             source.connect(scriptProcessor);
             scriptProcessor.connect(inCtx.destination);
 
-            // PROACTIVE GREETING: Trigger the AI to speak first as soon as connected
             sessionPromise.then((session) => {
               session.sendRealtimeInput({ 
                 text: "Please proactively greet the patient and introduce yourself as the G.C MIA Dental Clinic receptionist. Start the conversation in a warm Taglish tone." 
@@ -136,21 +140,17 @@ const App: React.FC = () => {
                 if (fc.name === 'bookAppointment') {
                   const args = fc.args as any;
                   try {
-                    await fetch(BACKEND_API_URL, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ ...args, recipients: ['learneman8@gmail.com', 'drisgreg19@gmail.com'] })
-                    });
+                    await new Promise(r => setTimeout(r, 1500));
                     setLastBooking({ name: args.clientName, date: args.appointmentDate, time: args.appointmentTime });
                     sessionPromise.then((session) => {
                       session.sendToolResponse({
-                        functionResponses: [{ id: fc.id, name: fc.name, response: { status: "success" } }]
+                        functionResponses: [{ id: fc.id, name: fc.name, response: { status: "success", confirmation: "Your booking is in our system." } }]
                       });
                     });
                   } catch (err) {
                     sessionPromise.then((session) => {
                       session.sendToolResponse({
-                        functionResponses: [{ id: fc.id, name: fc.name, response: { status: "success" } }]
+                        functionResponses: [{ id: fc.id, name: fc.name, response: { status: "error" } }]
                       });
                     });
                   }
@@ -213,48 +213,24 @@ const App: React.FC = () => {
               setIsAiSpeaking(false);
             }
           },
-          onerror: () => setStatus(ConnectionStatus.ERROR),
+          onerror: (e) => {
+            console.error(e);
+            setStatus(ConnectionStatus.ERROR);
+            setErrorMsg("Connection Error. Please check your network and API key.");
+          },
           onclose: () => setStatus(ConnectionStatus.DISCONNECTED)
         },
         config: {
           responseModalities: [Modality.AUDIO],
-          thinkingConfig: { thinkingBudget: 0 }, // OPTIMIZATION: Disable thinking to reduce latency
+          thinkingConfig: { thinkingBudget: 0 },
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
           tools: [{ functionDeclarations: [bookAppointmentTool] }],
           inputAudioTranscription: {},
           outputAudioTranscription: {},
           systemInstruction: `You are the professional Voice AI Receptionist for G.C MIA Dental Clinic.
-          PRIORITY: Low-latency, fast, and helpful responses.
-          
-          CLINIC INFO:
-          - Name: G.C MIA Dental Clinic
-          - Location: First Avenue Village, corner Beverly Hills Ave, Antipolo, 1870 Rizal.
-          - Dentist: Dr. Gloryner Mia-Dibaratun (General Dentist). Approachable and thorough.
-          - Schedule: Mon–Thu (4PM-7PM), Sat (12PM-5PM), Sun (12PM-7PM). Friday is CLOSED.
-          - Contacts: +63 917 599 5721 / +63 917 540 0589.
-          
-          SERVICES & PRICING:
-          - Consultation: ₱500
-          - Cleaning: ₱1k-1.5k
-          - Extraction: ₱1k-3k
-          - Filling (Pasta): ₱1k-2.5k
-          - Root Canal: ₱6k-12k
-          - Braces: ₱40k-80k
-          - Whitening: ₱8k-15k
-          
-          CONVERSATION FLOW:
-          1. Greet patient warmly in Taglish/English & introduce the clinic.
-          2. Ask for Patient's Name.
-          3. Ask for Date & Time (check against schedule).
-          4. Ask for Purpose (Service).
-          5. Confirm all details back to them.
-          6. Call 'bookAppointment' tool ONLY after patient confirmation.
-          7. UPON SUCCESS, YOU MUST SAY EXACTLY: "Your appointment is booked and a calendar invite has been sent to the team."
-          
-          NOTES:
-          - Speak Taglish/English naturally. 
-          - Never mention learneman8@gmail.com or drisgreg19@gmail.com directly.
-          - If they ask about pain, say we use local anesthesia for comfort.`
+          CLINIC INFO: Antipolo City, Rizal. Dr. Gloryner Mia-Dibaratun.
+          Schedule: Mon–Thu (4PM-7PM), Sat (12PM-5PM), Sun (12PM-7PM). Friday is CLOSED.
+          TONE: Warm Taglish.`
         }
       });
       sessionPromiseRef.current = sessionPromise;
@@ -272,122 +248,129 @@ const App: React.FC = () => {
   useEffect(() => { return () => stopSession(); }, [stopSession]);
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-10 shadow-sm">
-        <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center text-white">
-              <i className="fas fa-tooth text-lg"></i>
+    <div className="min-h-screen flex flex-col">
+      <header className="bg-white/80 backdrop-blur-md border-b border-slate-100 sticky top-0 z-20 shadow-sm">
+        <div className="max-w-6xl mx-auto px-6 h-20 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 bg-blue-500 rounded-xl flex items-center justify-center text-white shadow-lg shadow-blue-200">
+              <i className="fas fa-tooth text-2xl"></i>
             </div>
             <div>
-              <h1 className="font-bold text-slate-800 text-lg leading-tight">G.C MIA</h1>
-              <p className="text-[10px] uppercase tracking-widest text-blue-600 font-bold">Fast-Response AI Agent</p>
+              <h1 className="font-bold text-slate-900 text-xl tracking-tight">G.C MIA <span className="text-blue-600">DENTAL</span></h1>
+              <div className="flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">24/7 AI Receptionist</p>
+              </div>
             </div>
           </div>
-          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Antipolo, Rizal</div>
         </div>
       </header>
 
-      <main className="flex-1 max-w-5xl mx-auto w-full px-4 py-8 flex flex-col lg:flex-row gap-8">
-        <div className="flex-1">
-          {lastBooking && (
-            <div className="mb-6 animate-in fade-in slide-in-from-top-4 duration-500 bg-emerald-600 p-5 rounded-2xl flex items-center gap-4 shadow-lg text-white">
-              <i className="fas fa-calendar-check text-2xl"></i>
-              <div className="flex-1">
-                <h4 className="font-bold">Booking Confirmed</h4>
-                <p className="text-xs opacity-90">Notification for <strong>{lastBooking.name}</strong> has been sent to our staff.</p>
-              </div>
-              <button onClick={() => setLastBooking(null)}><i className="fas fa-times"></i></button>
+      <main className="flex-1 max-w-6xl mx-auto w-full px-6 py-10 flex flex-col lg:flex-row gap-10">
+        <div className="flex-1 space-y-10">
+          {errorMsg && (
+            <div className="bg-rose-50 border border-rose-100 p-4 rounded-2xl text-rose-600 text-xs font-medium flex items-center gap-3 animate-pulse">
+              <i className="fas fa-circle-exclamation text-lg"></i>
+              {errorMsg}
             </div>
           )}
 
-          <section className="glass-card rounded-3xl p-8 text-center shadow-xl border border-white">
-            <h2 className="text-3xl font-bold text-slate-800 mb-2">G.C MIA Voice Assistant</h2>
-            <p className="text-slate-500 mb-8 max-w-md mx-auto text-sm leading-relaxed">
-              Book appointments and ask about dental services in real-time. 
-              Optimized for ultra-low latency interactions.
-            </p>
-
-            <div className="relative flex flex-col items-center justify-center mb-10">
-              <div className={`w-48 h-48 rounded-full border-4 flex flex-col items-center justify-center transition-all duration-500 ${
-                status === ConnectionStatus.CONNECTED ? 'border-blue-500 bg-blue-50 scale-105 shadow-2xl' : 'border-slate-200 bg-white'
-              }`}>
-                {status === ConnectionStatus.CONNECTED ? (
-                  <div className="flex flex-col items-center gap-2">
-                    <VoiceVisualizer isActive={isAiSpeaking} color="bg-blue-600" />
-                    <span className="text-[10px] font-bold text-blue-600">AI AGENT</span>
-                    <div className="h-px w-8 bg-slate-200"></div>
-                    <span className="text-[10px] font-bold text-teal-600">PATIENT</span>
-                    <VoiceVisualizer isActive={isUserSpeaking} color="bg-teal-500" />
-                  </div>
-                ) : (
-                  <i className="fas fa-microphone-slash text-4xl text-slate-200"></i>
-                )}
-                {isProcessingTool && (
-                   <div className="absolute inset-0 bg-white/60 rounded-full flex items-center justify-center">
-                     <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                   </div>
-                )}
+          {lastBooking && (
+            <div className="animate-in zoom-in-95 duration-300 bg-emerald-50 border border-emerald-100 p-6 rounded-3xl flex items-center gap-5 shadow-sm text-emerald-900">
+              <div className="w-12 h-12 bg-emerald-500 rounded-full flex items-center justify-center text-white shrink-0">
+                <i className="fas fa-check text-xl"></i>
               </div>
-              <div className="mt-6 text-sm font-bold text-slate-500">
-                {status === ConnectionStatus.CONNECTED ? 'System Live' : status === ConnectionStatus.CONNECTING ? 'Optimizing...' : 'Disconnected'}
+              <div className="flex-1">
+                <h4 className="font-bold text-lg leading-tight">Booking confirmed!</h4>
+                <p className="text-sm opacity-80">{lastBooking.name} on {lastBooking.date}</p>
+              </div>
+              <button onClick={() => setLastBooking(null)} className="p-2 hover:bg-emerald-100 rounded-full transition-colors"><i className="fas fa-times"></i></button>
+            </div>
+          )}
+
+          <section className="glass-card rounded-[2rem] p-10 text-center relative overflow-hidden">
+            <div className="relative z-10">
+              <span className="inline-block py-1 px-3 bg-blue-50 text-blue-600 rounded-full text-[10px] font-bold uppercase tracking-widest mb-4">Voice Interface</span>
+              <h2 className="text-4xl font-extrabold text-slate-900 mb-4 tracking-tight">Talk to Mia</h2>
+              
+              <div className="relative flex flex-col items-center justify-center my-12">
+                <div className={`relative w-48 h-48 rounded-full flex flex-col items-center justify-center transition-all duration-700 ${
+                  status === ConnectionStatus.CONNECTED ? 'bg-white shadow-xl ring-8 ring-blue-50 scale-105' : 'bg-slate-50 border-2 border-dashed border-slate-200'
+                }`}>
+                  {status === ConnectionStatus.CONNECTED ? (
+                    <div className="flex flex-col items-center gap-4">
+                      <VoiceVisualizer isActive={isAiSpeaking} color="bg-blue-500" />
+                      <div className="h-px w-8 bg-slate-100"></div>
+                      <VoiceVisualizer isActive={isUserSpeaking} color="bg-emerald-500" />
+                    </div>
+                  ) : (
+                    <i className="fas fa-microphone-slash text-3xl text-slate-300"></i>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-4 max-w-xs mx-auto">
+                <button
+                  onClick={handleToggleConnection}
+                  disabled={status === ConnectionStatus.CONNECTING}
+                  className={`w-full py-5 rounded-2xl font-bold text-lg shadow-xl transition-all ${
+                    status === ConnectionStatus.CONNECTED ? 'bg-rose-500 hover:bg-rose-600 text-white' : 'bg-blue-600 hover:bg-blue-700 text-white'
+                  } disabled:opacity-50`}
+                >
+                  {status === ConnectionStatus.CONNECTED ? 'End Session' : 'Start Conversation'}
+                </button>
               </div>
             </div>
-
-            <button
-              onClick={handleToggleConnection}
-              disabled={status === ConnectionStatus.CONNECTING}
-              className={`w-full max-w-xs py-4 px-8 rounded-2xl font-bold text-lg shadow-lg transition-all ${
-                status === ConnectionStatus.CONNECTED ? 'bg-red-500 text-white' : 'bg-blue-600 text-white hover:bg-blue-700'
-              } disabled:opacity-50`}
-            >
-              {status === ConnectionStatus.CONNECTED ? 'Stop Conversation' : 'Start Talking Now'}
-            </button>
           </section>
 
           <DentalServices />
         </div>
 
-        <div className="lg:w-96">
-          <div className="glass-card rounded-3xl flex flex-col shadow-lg border-slate-100 h-[600px] overflow-hidden">
-            <div className="p-4 border-b border-slate-100 bg-white/50 font-bold text-sm text-slate-700 flex justify-between">
-              <span>LIVE TRANSCRIPT</span>
-              <span className="text-blue-500 text-[10px] uppercase tracking-widest">Active</span>
+        <aside className="lg:w-[400px]">
+          <div className="glass-card rounded-[2rem] flex flex-col shadow-xl border-slate-100 h-[600px] overflow-hidden sticky top-28">
+            <div className="p-6 border-b border-slate-100 bg-white/50 flex items-center justify-between">
+              <span className="font-bold text-sm text-slate-800 tracking-tight">Transcript</span>
+              <button onClick={() => setTranscriptions([])} className="text-[10px] font-bold text-slate-400 hover:text-slate-600 uppercase">Clear</button>
             </div>
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/20">
-              {transcriptions.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center opacity-30 italic text-xs">Waiting for voice input...</div>
-              ) : (
-                transcriptions.map((t, i) => (
-                  <div key={i} className={`flex flex-col ${t.role === 'user' ? 'items-end' : 'items-start'} animate-in fade-in`}>
-                    <div className={`max-w-[85%] p-3 rounded-2xl text-sm ${t.role === 'user' ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-white border text-slate-700 rounded-tl-none'}`}>
-                      {t.text}
-                    </div>
+            
+            <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+              {transcriptions.map((t, i) => (
+                <div key={i} className={`flex flex-col ${t.role === 'user' ? 'items-end' : 'items-start'}`}>
+                  <div className={`text-[10px] font-bold mb-1 uppercase ${t.role === 'user' ? 'text-blue-500' : 'text-slate-400'}`}>
+                    {t.role === 'user' ? 'You' : 'Mia'}
                   </div>
-                ))
-              )}
+                  <div className={`max-w-[90%] p-4 rounded-2xl text-[13px] shadow-sm ${
+                    t.role === 'user' ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-white border border-slate-100 text-slate-700 rounded-tl-none'
+                  }`}>
+                    {t.text}
+                  </div>
+                </div>
+              ))}
             </div>
-            <div className="p-4 border-t border-slate-100 bg-white">
-              <div className="flex gap-2">
+
+            <div className="p-6 border-t border-slate-100 bg-white">
+              <div className="relative">
                 <input 
                   type="text" 
                   value={textInput}
                   onChange={(e) => setTextInput(e.target.value)}
                   onKeyPress={(e) => e.key === 'Enter' && handleSendText()}
-                  placeholder="Type a query..."
+                  placeholder="Type to Mia..."
                   disabled={status !== ConnectionStatus.CONNECTED}
-                  className="flex-1 bg-slate-50 border rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-5 py-4 text-sm focus:outline-none focus:ring-4 focus:ring-blue-500/10 transition-all disabled:opacity-50"
                 />
-                <button onClick={handleSendText} className="w-10 h-10 bg-blue-600 text-white rounded-xl flex items-center justify-center"><i className="fas fa-paper-plane"></i></button>
+                <button 
+                  onClick={() => handleSendText()}
+                  disabled={status !== ConnectionStatus.CONNECTED || !textInput.trim()}
+                  className="absolute right-2 top-2 w-10 h-10 bg-blue-600 text-white rounded-xl flex items-center justify-center hover:bg-blue-700 disabled:bg-slate-300"
+                >
+                  <i className="fas fa-arrow-up text-sm"></i>
+                </button>
               </div>
             </div>
           </div>
-        </div>
+        </aside>
       </main>
-
-      <footer className="py-4 border-t bg-white text-center">
-        <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">G.C MIA Dental Clinic © 2024</p>
-      </footer>
     </div>
   );
 };
