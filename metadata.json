@@ -1,0 +1,7 @@
+{
+  "name": "Copy of G.C Mia Dental AI Assistant",
+  "description": "A cutting-edge conversational voice AI agent for G.C Mia Dental, powered by Gemini 2.5 Native Audio for real-time patient interactions and scheduling assistance.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
